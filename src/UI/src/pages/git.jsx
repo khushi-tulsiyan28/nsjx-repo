@@ -17,29 +17,29 @@ const GitPage = () => {
   const [showProjectForm, setShowProjectForm] = useState(false);
   const [projectLoading, setProjectLoading] = useState(false);
 
-  const GITHUB_CLIENT_ID = process.env.REACT_APP_GITHUB_CLIENT_ID;
-  const GITHUB_REDIRECT_URI = process.env.REACT_APP_GITHUB_REDIRECT_URI || 'http://localhost:3000/git';
+  const BITBUCKET_CLIENT_ID = process.env.REACT_APP_BITBUCKET_CLIENT_ID;
+  const BITBUCKET_REDIRECT_URI = process.env.REACT_APP_BITBUCKET_REDIRECT_URI || 'http://localhost:3000/git';
   const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:3001/api';
 
-  const handleGitHubLogin = () => {
-    const githubAuthUrl = `https://github.com/login/oauth/authorize?client_id=${GITHUB_CLIENT_ID}&redirect_uri=${GITHUB_REDIRECT_URI}&scope=repo,user`;
-    window.location.href = githubAuthUrl;
+  const handleBitbucketLogin = () => {
+    const bitbucketAuthUrl = `https://bitbucket.org/site/oauth2/authorize?client_id=${BITBUCKET_CLIENT_ID}&redirect_uri=${BITBUCKET_REDIRECT_URI}&response_type=code&scope=repository`;
+    window.location.href = bitbucketAuthUrl;
   };
 
-  const handleGitHubLogout = () => {
+  const handleBitbucketLogout = () => {
     setIsAuthenticated(false);
     setUser(null);
     setRepositories([]);
-    localStorage.removeItem('github_token');
+    localStorage.removeItem('bitbucket_token');
   };
 
   const fetchUserData = async (token) => {
     try {
       setLoading(true);
-      const response = await fetch('https://api.github.com/user', {
+      const response = await fetch('https://api.bitbucket.org/2.0/user', {
         headers: {
-          'Authorization': `token ${token}`,
-          'Accept': 'application/vnd.github.v3+json'
+          'Authorization': `Bearer ${token}`,
+          'Accept': 'application/json'
         }
       });
       
@@ -60,16 +60,16 @@ const GitPage = () => {
 
   const fetchRepositories = async (token) => {
     try {
-      const response = await fetch('https://api.github.com/user/repos?sort=updated&per_page=10', {
+      const response = await fetch('https://api.bitbucket.org/2.0/repositories?role=owner&sort=-updated_on&pagelen=10', {
         headers: {
-          'Authorization': `token ${token}`,
-          'Accept': 'application/vnd.github.v3+json'
+          'Authorization': `Bearer ${token}`,
+          'Accept': 'application/json'
         }
       });
       
       if (response.ok) {
-        const repos = await response.json();
-        setRepositories(repos);
+        const data = await response.json();
+        setRepositories(data.values || []);
       }
     } catch (err) {
       console.error('Failed to fetch repositories:', err);
@@ -85,18 +85,18 @@ const GitPage = () => {
       try {
         setProjectLoading(true);
         
-        const token = localStorage.getItem('github_token');
-        console.log('GitHub authentication status:', { isAuthenticated, user: user?.login, hasToken: !!token });
+        const token = localStorage.getItem('bitbucket_token');
+        console.log('Bitbucket authentication status:', { isAuthenticated, user: user?.username, hasToken: !!token });
         
         if (!token) {
-          setError('GitHub token not found. Please re-authenticate.');
+          setError('Bitbucket token not found. Please re-authenticate.');
           return;
         }
 
-        const response = await fetch(`https://api.github.com/repos/${user.login}/${name}/contents`, {
+        const response = await fetch(`https://api.bitbucket.org/2.0/repositories/${user.username}/${name}/src`, {
           headers: {
-            'Authorization': `token ${token}`,
-            'Accept': 'application/vnd.github.v3+json'
+            'Authorization': `Bearer ${token}`,
+            'Accept': 'application/json'
           }
         });
 
@@ -106,10 +106,10 @@ const GitPage = () => {
             .filter(item => item.type === 'dir')
             .map(item => item.name);
           
-          console.log('Fetched folders from GitHub:', folders);
+          console.log('Fetched folders from Bitbucket:', folders);
           setAvailableFolders(folders);
         } else if (response.status === 404) {
-          setError(`Repository "${name}" not found in your GitHub account`);
+          setError(`Repository "${name}" not found in your Bitbucket account`);
           setAvailableFolders([]);
         } else {
           throw new Error(`Failed to fetch repository contents: ${response.status}`);
@@ -126,9 +126,9 @@ const GitPage = () => {
         }
     } else if (name.trim()) {
       if (!isAuthenticated) {
-        setError('Please authenticate with GitHub first to fetch repository folders');
+        setError('Please authenticate with Bitbucket first to fetch repository folders');
       } else {
-        setError('Please enter a valid repository name from your GitHub account');
+        setError('Please enter a valid repository name from your Bitbucket account');
       }
       setAvailableFolders([]);
     } else {
@@ -186,7 +186,7 @@ const GitPage = () => {
           },
           body: JSON.stringify({
             pipelineName: pipelineName,
-            repoUrl: `https://github.com/${user.login}/${projectName}.git`, 
+            repoUrl: `https://bitbucket.org/${user.username}/${projectName}.git`, 
             branch: 'main',
             projectName: projectName,
             experimentName: 'kedro-pipeline',
@@ -244,11 +244,11 @@ const GitPage = () => {
     const code = urlParams.get('code');
     
     if (code) {
-      console.log('GitHub authorization code received:', code);
+      console.log('Bitbucket authorization code received:', code);
       exchangeCodeForToken(code);
     }
 
-    const token = localStorage.getItem('github_token');
+    const token = localStorage.getItem('bitbucket_token');
     if (token) {
       fetchUserData(token);
     }
@@ -256,31 +256,31 @@ const GitPage = () => {
 
   const exchangeCodeForToken = async (code) => {
     try {
-      const response = await fetch(`${API_BASE_URL}/github/exchange-code`, {
+      const response = await fetch(`${API_BASE_URL}/bitbucket/exchange-code`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
           code: code,
-          redirect_uri: GITHUB_REDIRECT_URI
+          redirect_uri: BITBUCKET_REDIRECT_URI
         })
       });
 
       if (response.ok) {
         const data = await response.json();
-        localStorage.setItem('github_token', data.access_token);
+        localStorage.setItem('bitbucket_token', data.access_token);
         await fetchUserData(data.access_token);
         
         const newUrl = window.location.pathname;
         window.history.replaceState({}, document.title, newUrl);
       } else {
         console.error('Failed to exchange code for token');
-        setError('Failed to complete GitHub authentication');
+        setError('Failed to complete Bitbucket authentication');
       }
     } catch (error) {
       console.error('Error exchanging code for token:', error);
-      setError('Failed to complete GitHub authentication');
+      setError('Failed to complete Bitbucket authentication');
     }
   };
 
@@ -294,7 +294,7 @@ const GitPage = () => {
 
   return (
     <div className="git-container">
-      <h1>GitHub Integration</h1>
+      <h1>Bitbucket Integration</h1>
       
       {error && (
         <div className="error-message">
@@ -304,33 +304,33 @@ const GitPage = () => {
 
       {!isAuthenticated ? (
         <div className="auth-section">
-          <h2>Connect to GitHub</h2>
-          <p>Connect your GitHub account to access your repositories and manage your projects.</p>
+          <h2>Connect to Bitbucket</h2>
+          <p>Connect your Bitbucket account to access your repositories and manage your projects.</p>
           <button 
             className="github-login-btn"
-            onClick={handleGitHubLogin}
+            onClick={handleBitbucketLogin}
           >
             <svg className="github-icon" viewBox="0 0 24 24">
               <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
             </svg>
-            Sign in with GitHub
+            Sign in with Bitbucket
           </button>
         </div>
       ) : (
         <div className="user-section">
           <div className="user-info">
             <img 
-              src={user?.avatar_url || 'https://github.com/github.png'} 
+              src={user?.avatar || 'https://bitbucket.org/static/images/default-avatar.png'} 
               alt="User avatar" 
               className="user-avatar"
             />
             <div className="user-details">
-              <h2>Welcome, {user?.login || 'User'}!</h2>
+              <h2>Welcome, {user?.username || 'User'}!</h2>
               <button 
                 className="logout-btn"
-                onClick={handleGitHubLogout}
+                onClick={handleBitbucketLogout}
               >
-                Disconnect GitHub
+                Disconnect Bitbucket
               </button>
             </div>
           </div>
@@ -340,15 +340,15 @@ const GitPage = () => {
             {repositories.length > 0 ? (
               <div className="repos-grid">
                 {repositories.map(repo => (
-                  <div key={repo.id} className="repo-card">
+                  <div key={repo.uuid} className="repo-card">
                     <h4>{repo.name}</h4>
                     <p>{repo.description || 'No description available'}</p>
                     <div className="repo-meta">
                       <span className="repo-language">{repo.language || 'Unknown'}</span>
-                      <span className="repo-stars">⭐ {repo.stargazers_count}</span>
+                      <span className="repo-stars">⭐ {repo.stars_count}</span>
                     </div>
                     <a 
-                      href={repo.html_url} 
+                      href={repo.links.html.href} 
                       target="_blank" 
                       rel="noopener noreferrer"
                       className="repo-link"

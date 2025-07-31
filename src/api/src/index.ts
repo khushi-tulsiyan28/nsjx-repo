@@ -41,6 +41,36 @@ app.post("/api/pipelines/trigger", (req, res) => gitSshController.triggerPipelin
 
 app.post("/api/github/exchange-code", (req, res) => gitHubController.exchangeCodeForToken(req, res));
 
+app.post('/api/bitbucket/exchange-code', async (req, res) => {
+  try {
+    const { code, redirect_uri } = req.body;
+    
+    const tokenResponse = await fetch('https://bitbucket.org/site/oauth2/access_token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        code: code,
+        redirect_uri: redirect_uri,
+        client_id: process.env.BITBUCKET_CLIENT_ID || '',
+        client_secret: process.env.BITBUCKET_CLIENT_SECRET || ''
+      })
+    });
+
+    if (tokenResponse.ok) {
+      const tokenData = await tokenResponse.json() as any;
+      res.json({ access_token: tokenData.access_token });
+    } else {
+      res.status(400).json({ error: 'Failed to exchange code for token' });
+    }
+  } catch (error) {
+    console.error('Bitbucket OAuth error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
   console.error(err.stack);
   res.status(500).json({ error: "Something went wrong!" });

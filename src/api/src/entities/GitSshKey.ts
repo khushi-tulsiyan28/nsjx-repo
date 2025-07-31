@@ -20,7 +20,7 @@ export class GitSshKey {
   @Column({ type: "varchar", length: 255, nullable: true })
   passphrase!: string;
 
-  @Column({ type: "varchar", length: 255, default: "github" })
+  @Column({ type: "varchar", length: 255, default: "bitbucket" })
   provider!: string;
 
   @Column({ type: "boolean", default: true })
