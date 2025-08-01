@@ -1,12 +1,15 @@
 import { Request, Response } from "express";
 import { GitSshService } from "../services/GitSshService";
+import { WebSocketService, RepositoryEvent } from "../services/WebSocketService";
 import fetch from "node-fetch";
 
 export class GitSshController {
   private gitSshService: GitSshService;
+  private webSocketService?: WebSocketService;
 
-  constructor() {
+  constructor(webSocketService?: WebSocketService) {
     this.gitSshService = new GitSshService();
+    this.webSocketService = webSocketService;
   }
 
   async createSshKey(req: Request, res: Response): Promise<void> {
@@ -162,7 +165,7 @@ export class GitSshController {
       res.status(200).json({ message: "SSH key deleted successfully" });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred';
-      res.status(500).json({ error: error.message });
+      res.status(500).json({ error: errorMessage });
     }
   }
 
@@ -208,15 +211,12 @@ export class GitSshController {
           project_name: projectName || "kedro_project",
           experiment_name: fullExperimentName,
           guid: guid,
-          ssh_key_id: sshKeyId || null,
-          ssh_private_key: sshKey?.privateKey || "",
-          ssh_public_key: sshKey?.publicKey || ""
+          ssh_key_id: sshKeyId || null
         }
       };
 
       console.log("Triggering Airflow DAG with payload:", dagRunPayload);
 
-      // Try multiple authentication methods
       let dagRunResponse;
       const airflowUsername = process.env.AIRFLOW_USERNAME || "api_user";
       const airflowPassword = process.env.AIRFLOW_PASSWORD || "api123";
@@ -338,7 +338,78 @@ export class GitSshController {
 
     } catch (error) {
       console.error('Pipeline trigger error:', error);
-      res.status(500).json({ error: error.message });
+      const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred';
+      res.status(500).json({ error: errorMessage });
+    }
+  }
+
+  async notifyRepositorySuccess(req: Request, res: Response): Promise<void> {
+    try {
+      const {
+        guid,
+        pipeline_name,
+        repo_url,
+        branch,
+        project_path,
+        repo_status,
+        validation_info,
+        timestamp
+      } = req.body;
+
+      console.log("Received repository success notification:", {
+        guid,
+        pipeline_name,
+        repo_url,
+        branch,
+        project_path,
+        repo_status,
+        validation_info,
+        timestamp
+      });
+
+      const successData = {
+        guid,
+        pipeline_name,
+        repo_url: repo_url || 'local',
+        branch: branch || 'local',
+        project_path,
+        repo_status,
+        validation_info,
+        timestamp: timestamp || new Date().toISOString(),
+        status: 'repository_setup_successful'
+      };
+
+      console.log("Repository setup successful:", successData);
+
+      if (this.webSocketService) {
+        const repositoryEvent: RepositoryEvent = {
+          guid,
+          pipeline_name,
+          repo_url: repo_url || 'local',
+          branch: branch || 'local',
+          project_path,
+          repo_status,
+          validation_info,
+          timestamp: timestamp || new Date().toISOString(),
+          event_type: 'repository_success'
+        };
+
+        this.webSocketService.broadcastRepositoryEvent(repositoryEvent);
+      }
+
+      res.status(200).json({
+        message: "Repository success notification received",
+        data: {
+          guid,
+          status: 'acknowledged',
+          timestamp: new Date().toISOString()
+        }
+      });
+
+    } catch (error) {
+      console.error('Repository success notification error:', error);
+      const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred';
+      res.status(500).json({ error: errorMessage });
     }
   }
 } 

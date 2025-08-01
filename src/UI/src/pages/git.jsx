@@ -16,6 +16,8 @@ const GitPage = () => {
   const [pipelineName, setPipelineName] = useState('');
   const [showProjectForm, setShowProjectForm] = useState(false);
   const [projectLoading, setProjectLoading] = useState(false);
+  const [sshKeys, setSshKeys] = useState([]);
+  const [selectedSshKeyId, setSelectedSshKeyId] = useState('');
 
   const BITBUCKET_CLIENT_ID = process.env.REACT_APP_BITBUCKET_CLIENT_ID;
   const BITBUCKET_REDIRECT_URI = process.env.REACT_APP_BITBUCKET_REDIRECT_URI || 'http://localhost:3000/git';
@@ -73,6 +75,23 @@ const GitPage = () => {
       }
     } catch (err) {
       console.error('Failed to fetch repositories:', err);
+    }
+  };
+
+  const fetchSshKeys = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/ssh-keys`, {
+        headers: {
+          'user-id': 'default-user'
+        }
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        setSshKeys(data.data || []);
+      }
+    } catch (err) {
+      console.error('Failed to fetch SSH keys:', err);
     }
   };
 
@@ -190,7 +209,7 @@ const GitPage = () => {
             branch: 'main',
             projectName: projectName,
             experimentName: 'kedro-pipeline',
-            sshKeyId: null 
+            sshKeyId: selectedSshKeyId || null
           })
         });
 
@@ -252,6 +271,8 @@ const GitPage = () => {
     if (token) {
       fetchUserData(token);
     }
+    
+    fetchSshKeys();
   }, []);
 
   const exchangeCodeForToken = async (code) => {
@@ -447,6 +468,25 @@ const GitPage = () => {
                       placeholder="Enter pipeline name"
                       required
                     />
+                  </div>
+                )}
+
+                {isKedroProject && (
+                  <div className="form-group">
+                    <label htmlFor="sshKey">SSH Key (for repository access):</label>
+                    <select
+                      id="sshKey"
+                      value={selectedSshKeyId}
+                      onChange={(e) => setSelectedSshKeyId(e.target.value)}
+                    >
+                      <option value="">Select an SSH key (optional)</option>
+                      {sshKeys.map(key => (
+                        <option key={key.id} value={key.id}>
+                          {key.name} ({key.provider})
+                        </option>
+                      ))}
+                    </select>
+                    <small>Select an SSH key to use for repository cloning. If none selected, will use local project.</small>
                   </div>
                 )}
 

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import Settings from './pages/settings';
 import Git from './pages/git';
+import RepositoryEvents from './components/RepositoryEvents';
 import './App.css';
 
 function App() {
@@ -23,11 +24,19 @@ function App() {
         >
           Git
         </a>
+        <a 
+          href="#events" 
+          className={currentPage === 'events' ? 'active' : ''}
+          onClick={() => setCurrentPage('events')}
+        >
+          Repository Events
+        </a>
       </nav>
       
       <div className="container">
         {currentPage === 'settings' && <Settings />}
         {currentPage === 'git' && <Git />}
+        {currentPage === 'events' && <RepositoryEvents />}
       </div>
     </div>
   );
