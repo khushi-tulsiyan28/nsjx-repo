@@ -303,4 +303,58 @@
   .form-actions button {
     width: 100%;
   }
+}
+
+.ssh-key-toggle {
+  margin-bottom: 1rem;
+  padding: 1rem;
+  background-color: #f6f8fa;
+  border: 1px solid #e1e4e8;
+  border-radius: 6px;
+}
+
+.ssh-key-toggle .checkbox-item {
+  margin: 0;
+  font-weight: 600;
+  color: #0366d6;
+}
+
+.direct-ssh-keys {
+  margin-top: 1rem;
+}
+
+.database-ssh-keys {
+  margin-top: 1rem;
+}
+
+.ssh-key-textarea {
+  width: 100%;
+  padding: 0.75rem;
+  border: 1px solid #e1e4e8;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  background-color: #f6f8fa;
+  resize: vertical;
+  transition: border-color 0.2s;
+}
+
+.ssh-key-textarea:focus {
+  outline: none;
+  border-color: #0366d6;
+  box-shadow: 0 0 0 3px rgba(3, 102, 214, 0.1);
+  background-color: #ffffff;
+}
+
+.ssh-key-textarea::placeholder {
+  color: #6a737d;
+  font-style: italic;
+}
+
+.info-text {
+  color: #0366d6;
+  font-size: 0.875rem;
+  margin-top: 0.5rem;
+  display: block;
+  font-style: italic;
 } 

@@ -3,6 +3,7 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import { createServer } from "http";
+import fetch from "node-fetch";
 import { initializeDatabase } from "./config/database";
 import { GitSshController } from "./controllers/GitSshController";
 import { GitHubController } from "./controllers/GitHubController";
@@ -19,6 +20,59 @@ const webSocketService = new WebSocketService(server);
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+app.get('/git', (req, res) => {
+  const { code, error } = req.query;
+  
+  console.log('OAuth callback received:', { 
+    code: code ? 'present' : 'missing', 
+    error: error ? 'present' : 'missing',
+    query: req.query,
+    url: req.url 
+  });
+  
+  if (error) {
+    return res.send(`
+      <html>
+        <head><title>OAuth Error</title></head>
+        <body>
+          <h1>OAuth Error</h1>
+          <p>Error: ${error}</p>
+          <script>
+            window.opener.postMessage({ type: 'oauth_error', error: '${error}' }, '*');
+            window.close();
+          </script>
+        </body>
+      </html>
+    `);
+  }
+  
+  if (code) {
+    return res.send(`
+      <html>
+        <head><title>OAuth Success</title></head>
+        <body>
+          <h1>Authentication Successful</h1>
+          <p>You can close this window and return to the application.</p>
+          <script>
+            window.opener.postMessage({ type: 'oauth_success', code: '${code}' }, '*');
+            setTimeout(() => window.close(), 1000);
+          </script>
+        </body>
+      </html>
+    `);
+  }
+  
+  res.send(`
+    <html>
+      <head><title>OAuth Callback</title></head>
+      <body>
+        <h1>OAuth Callback</h1>
+        <p>No authorization code received.</p>
+      </body>
+    </html>
+  `);
+});
 
 initializeDatabase()
   .then(() => {
@@ -51,6 +105,12 @@ app.post('/api/bitbucket/exchange-code', async (req, res) => {
   try {
     const { code, redirect_uri } = req.body;
     
+    console.log('Exchange code request:', { code, redirect_uri });
+    console.log('Environment variables:', {
+      client_id: process.env.BITBUCKET_CLIENT_ID ? 'set' : 'not set',
+      client_secret: process.env.BITBUCKET_CLIENT_SECRET ? 'set' : 'not set'
+    });
+    
     const tokenResponse = await fetch('https://bitbucket.org/site/oauth2/access_token', {
       method: 'POST',
       headers: {
@@ -65,11 +125,15 @@ app.post('/api/bitbucket/exchange-code', async (req, res) => {
       })
     });
 
+    console.log('Token response status:', tokenResponse.status);
+    
     if (tokenResponse.ok) {
       const tokenData = await tokenResponse.json() as any;
       res.json({ access_token: tokenData.access_token });
     } else {
-      res.status(400).json({ error: 'Failed to exchange code for token' });
+      const errorText = await tokenResponse.text();
+      console.log('Token response error:', errorText);
+      res.status(400).json({ error: 'Failed to exchange code for token', details: errorText });
     }
   } catch (error) {
     console.error('Bitbucket OAuth error:', error);

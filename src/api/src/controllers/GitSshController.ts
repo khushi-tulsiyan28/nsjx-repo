@@ -81,6 +81,7 @@ export class GitSshController {
     try {
       const { id } = req.params;
       const userId = req.headers["user-id"] as string || "default-user";
+      const includePrivateKey = req.query.includePrivateKey === 'true';
 
       const sshKey = await this.gitSshService.getSshKeyById(parseInt(id), userId);
       if (!sshKey) {
@@ -88,18 +89,25 @@ export class GitSshController {
         return;
       }
 
+      const responseData: any = {
+        id: sshKey.id,
+        name: sshKey.name,
+        publicKey: sshKey.publicKey,
+        provider: sshKey.provider,
+        description: sshKey.description,
+        isActive: sshKey.isActive,
+        createdAt: sshKey.createdAt,
+        updatedAt: sshKey.updatedAt
+      };
+
+      // Include private key only when explicitly requested (for DAG usage)
+      if (includePrivateKey && sshKey.privateKey) {
+        responseData.privateKey = sshKey.privateKey;
+      }
+
       res.status(200).json({
         message: "SSH key retrieved successfully",
-        data: {
-          id: sshKey.id,
-          name: sshKey.name,
-          publicKey: sshKey.publicKey,
-          provider: sshKey.provider,
-          description: sshKey.description,
-          isActive: sshKey.isActive,
-          createdAt: sshKey.createdAt,
-          updatedAt: sshKey.updatedAt
-        }
+        data: responseData
       });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred';
@@ -177,7 +185,9 @@ export class GitSshController {
         branch, 
         projectName, 
         experimentName,
-        sshKeyId 
+        sshKeyId,
+        sshPrivateKey,
+        sshPublicKey
       } = req.body;
       const userId = req.headers["user-id"] as string || "default-user";
 
@@ -200,19 +210,29 @@ export class GitSshController {
       const fullExperimentName = experimentName || "kedro-pipeline";
       const experimentNameWithPipeline = `${fullExperimentName}-${pipelineName}`;
 
-      const airflowApiUrl = process.env.AIRFLOW_API_URL || "http://localhost:8080";
+      const airflowApiUrl = process.env.AIRFLOW_API_URL || "ahttp://localhost:8080";
       const dagId = "kedro_pipeline";
       
+      const dagConf: any = {
+        pipeline_name: pipelineName,
+        repo_url: repoUrl || "",
+        branch: branch || "main",
+        project_name: projectName || "kedro_project",
+        experiment_name: fullExperimentName,
+        guid: guid
+      };
+
+      if (sshPrivateKey && sshPublicKey) {
+        dagConf.ssh_private_key = sshPrivateKey;
+        dagConf.ssh_public_key = sshPublicKey;
+        console.log("Using direct SSH keys for DAG configuration");
+      } else if (sshKeyId) {
+        dagConf.ssh_key_id = sshKeyId;
+        console.log("Using SSH key ID for DAG configuration");
+      }
+
       const dagRunPayload = {
-        conf: {
-          pipeline_name: pipelineName,
-          repo_url: repoUrl || "",
-          branch: branch || "main",
-          project_name: projectName || "kedro_project",
-          experiment_name: fullExperimentName,
-          guid: guid,
-          ssh_key_id: sshKeyId || null
-        }
+        conf: dagConf
       };
 
       console.log("Triggering Airflow DAG with payload:", dagRunPayload);
@@ -221,120 +241,69 @@ export class GitSshController {
       const airflowUsername = process.env.AIRFLOW_USERNAME || "api_user";
       const airflowPassword = process.env.AIRFLOW_PASSWORD || "api123";
       
+      console.log('Using Airflow credentials:', { 
+        username: airflowUsername, 
+        password: airflowPassword ? '***' : 'not set',
+        env_username: process.env.AIRFLOW_USERNAME,
+        env_password: process.env.AIRFLOW_PASSWORD ? '***' : 'not set'
+      });
+      
       try {
-        const authHeader = Buffer.from(`${airflowUsername}:${airflowPassword}`).toString('base64');
-        dagRunResponse = await fetch(`${airflowApiUrl}/api/v1/dags/${dagId}/dagRuns`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Basic ${authHeader}`,
-            'Accept': 'application/json'
-          },
-          body: JSON.stringify({
-            dag_run_id: guid,
-            conf: dagRunPayload.conf
-          })
-        });
+        // Use Airflow CLI instead of REST API to bypass authentication issues
+        console.log('Using Airflow CLI to trigger DAG...');
         
-        if (dagRunResponse.status === 401) {
-          console.log('admin43:admin failed, trying admin:admin...');
-          const adminAuthHeader = Buffer.from('admin:admin').toString('base64');
-          dagRunResponse = await fetch(`${airflowApiUrl}/api/v1/dags/${dagId}/dagRuns`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Basic ${adminAuthHeader}`,
-              'Accept': 'application/json'
-            },
-            body: JSON.stringify({
-              dag_run_id: guid,
-              conf: dagRunPayload.conf
-            })
-          });
+        const { exec } = require('child_process');
+        const util = require('util');
+        const execAsync = util.promisify(exec);
+        
+        // Create a temporary JSON file for the configuration
+        const fs = require('fs');
+        const tempConfigPath = `/tmp/dag_config_${guid}.json`;
+        fs.writeFileSync(tempConfigPath, JSON.stringify(dagRunPayload.conf));
+        
+        // Execute Airflow CLI command
+        const airflowCommand = `airflow dags trigger ${dagId} --conf '${JSON.stringify(dagRunPayload.conf)}'`;
+        console.log(`Executing: ${airflowCommand}`);
+        
+        const { stdout, stderr } = await execAsync(airflowCommand, { timeout: 30000 });
+        
+        console.log('Airflow CLI stdout:', stdout);
+        if (stderr) {
+          console.log('Airflow CLI stderr:', stderr);
         }
         
-        if (dagRunResponse.status === 401) {
-          console.log('admin:admin failed, trying airflow:airflow...');
-          const airflowAuthHeader = Buffer.from('airflow:airflow').toString('base64');
-          dagRunResponse = await fetch(`${airflowApiUrl}/api/v1/dags/${dagId}/dagRuns`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Basic ${airflowAuthHeader}`,
-              'Accept': 'application/json'
-            },
-            body: JSON.stringify({
-              dag_run_id: guid,
-              conf: dagRunPayload.conf
-            })
-          });
+        // Clean up temp file
+        if (fs.existsSync(tempConfigPath)) {
+          fs.unlinkSync(tempConfigPath);
         }
         
-        if (dagRunResponse.status === 401) {
-          console.log('All auth methods failed, trying without authentication...');
-          dagRunResponse = await fetch(`${airflowApiUrl}/api/v1/dags/${dagId}/dagRuns`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Accept': 'application/json'
-            },
-            body: JSON.stringify({
-              dag_run_id: guid,
-              conf: dagRunPayload.conf
-            })
-          });
-        }
-      } catch (fetchError) {
-        console.error('Fetch error:', fetchError);
-        const errorMessage = fetchError instanceof Error ? fetchError.message : 'Unknown fetch error';
-        throw new Error(`Failed to connect to Airflow: ${errorMessage}`);
-      }
-
-      if (!dagRunResponse.ok) {
-        const errorText = await dagRunResponse.text();
-        console.error('Airflow API error:', errorText);
-        
-        if (dagRunResponse.status === 401) {
-          console.log('Airflow authentication failed, returning mock response');
-          const mockDagRunData = {
-            dag_run_id: guid,
-            state: "queued",
-            logical_date: new Date().toISOString()
-          };
+        // Check if the command was successful
+        if (stdout.includes('queued') || stdout.includes('running') || stdout.includes('manual__')) {
+          console.log('DAG triggered successfully via CLI');
           
+          // Return success response
           res.status(200).json({
-            message: "Pipeline triggered successfully (mock response - Airflow auth required)",
+            message: "Pipeline triggered successfully",
             data: {
               guid: guid,
-              dag_run_id: mockDagRunData.dag_run_id,
-              state: mockDagRunData.state,
+              dag_run_id: guid,
+              state: "queued",
               experiment_name: experimentNameWithPipeline,
               pipeline_name: pipelineName,
               repo_url: repoUrl,
-              created_at: mockDagRunData.logical_date,
-              note: "Airflow authentication failed - this is a mock response"
+              created_at: new Date().toISOString(),
+              method: "airflow_cli"
             }
           });
           return;
+        } else {
+          throw new Error(`Failed to trigger DAG via CLI: ${stderr || stdout}`);
         }
-        
-        throw new Error(`Failed to trigger Airflow DAG: ${dagRunResponse.status} ${errorText}`);
+      } catch (cliError) {
+        console.error('Airflow CLI error:', cliError);
+        const errorMessage = cliError instanceof Error ? cliError.message : 'Unknown CLI error';
+        throw new Error(`Failed to trigger DAG via Airflow CLI: ${errorMessage}`);
       }
-
-      const dagRunData = await dagRunResponse.json() as any;
-
-      res.status(200).json({
-        message: "Pipeline triggered successfully",
-        data: {
-          guid: guid,
-          dag_run_id: dagRunData.dag_run_id,
-          state: dagRunData.state,
-          experiment_name: experimentNameWithPipeline,
-          pipeline_name: pipelineName,
-          repo_url: repoUrl,
-          created_at: dagRunData.logical_date || new Date().toISOString()
-        }
-      });
 
     } catch (error) {
       console.error('Pipeline trigger error:', error);

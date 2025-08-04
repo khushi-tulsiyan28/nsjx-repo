@@ -18,14 +18,27 @@ const GitPage = () => {
   const [projectLoading, setProjectLoading] = useState(false);
   const [sshKeys, setSshKeys] = useState([]);
   const [selectedSshKeyId, setSelectedSshKeyId] = useState('');
+  
+  const [sshPrivateKey, setSshPrivateKey] = useState('');
+  const [sshPublicKey, setSshPublicKey] = useState('');
+  const [useDirectSshKeys, setUseDirectSshKeys] = useState(false);
 
   const BITBUCKET_CLIENT_ID = process.env.REACT_APP_BITBUCKET_CLIENT_ID;
-  const BITBUCKET_REDIRECT_URI = process.env.REACT_APP_BITBUCKET_REDIRECT_URI || 'http://localhost:3000/git';
+  const BITBUCKET_REDIRECT_URI = process.env.REACT_APP_BITBUCKET_REDIRECT_URI || 'http://localhost:3001/git';
   const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:3001/api';
 
   const handleBitbucketLogin = () => {
-    const bitbucketAuthUrl = `https://bitbucket.org/site/oauth2/authorize?client_id=${BITBUCKET_CLIENT_ID}&redirect_uri=${BITBUCKET_REDIRECT_URI}&response_type=code&scope=repository`;
-    window.location.href = bitbucketAuthUrl;
+    const bitbucketAuthUrl = `https://bitbucket.org/site/oauth2/authorize?client_id=${BITBUCKET_CLIENT_ID}&redirect_uri=${BITBUCKET_REDIRECT_URI}&response_type=code&scope=account`;
+    
+    const popup = window.open(
+      bitbucketAuthUrl,
+      'bitbucket-oauth',
+      'width=600,height=700,scrollbars=yes,resizable=yes'
+    );
+    
+    if (!popup) {
+      alert('Popup blocked! Please allow popups for this site and try again.');
+    }
   };
 
   const handleBitbucketLogout = () => {
@@ -174,7 +187,7 @@ const GitPage = () => {
       return;
     }
 
-    if (!selectedFolder) {
+    if (!selectedFolder && !useDirectSshKeys) {
       setError('Please select a folder');
       return;
     }
@@ -189,13 +202,30 @@ const GitPage = () => {
       return;
     }
 
+    if (useDirectSshKeys && (!sshPrivateKey.trim() || !sshPublicKey.trim())) {
+      setError('Both private and public SSH keys are required when using direct SSH keys');
+      return;
+    }
+
     try {
       setLoading(true);
       setError(null);
 
       if (isKedroProject && pipelineName.trim()) {
-        const guid = `pipeline_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-        const experimentName = `kedro-pipeline-${pipelineName}`;
+        const requestBody = {
+          pipelineName: pipelineName,
+          repoUrl: `https://bitbucket.org/${user.username}/${projectName}.git`, 
+          branch: 'main',
+          projectName: projectName,
+          experimentName: 'kedro-pipeline'
+        };
+
+        if (useDirectSshKeys && sshPrivateKey && sshPublicKey) {
+          requestBody.sshPrivateKey = sshPrivateKey;
+          requestBody.sshPublicKey = sshPublicKey;
+        } else if (selectedSshKeyId) {
+          requestBody.sshKeyId = selectedSshKeyId;
+        }
         
         const response = await fetch(`${API_BASE_URL}/pipelines/trigger`, {
           method: 'POST',
@@ -203,21 +233,14 @@ const GitPage = () => {
             'Content-Type': 'application/json',
             'user-id': 'default-user'
           },
-          body: JSON.stringify({
-            pipelineName: pipelineName,
-            repoUrl: `https://bitbucket.org/${user.username}/${projectName}.git`, 
-            branch: 'main',
-            projectName: projectName,
-            experimentName: 'kedro-pipeline',
-            sshKeyId: selectedSshKeyId || null
-          })
+          body: JSON.stringify(requestBody)
         });
 
         if (response.ok) {
           const data = await response.json();
           console.log('Pipeline triggered successfully:', data);
           
-          alert(`Pipeline "${pipelineName}" triggered successfully!\nGUID: ${data.data.guid}\nExperiment: ${data.data.experiment_name}`);
+          alert(`✅ DAG triggered successfully!\n\nGUID: ${data.data.guid}\nPipeline: ${pipelineName}\nExperiment: ${data.data.experiment_name}\n\nYou can track the execution in Airflow UI.`);
         } else {
           const errorData = await response.json();
           throw new Error(errorData.error || 'Failed to trigger pipeline');
@@ -226,12 +249,13 @@ const GitPage = () => {
 
       const projectConfig = {
         name: projectName,
-        folder: selectedFolder,
+        folder: useDirectSshKeys ? null : selectedFolder,
         isKedro: isKedroProject,
         isPython: isPythonProject,
         pipelineName: isKedroProject ? pipelineName : null,
         guid: isKedroProject && pipelineName.trim() ? `pipeline_${Date.now()}_${Math.random().toString(36).substr(2, 9)}` : null,
         experimentName: isKedroProject && pipelineName.trim() ? `kedro-pipeline-${pipelineName}` : null,
+        useDirectSshKeys: useDirectSshKeys,
         createdAt: new Date().toISOString()
       };
 
@@ -244,6 +268,10 @@ const GitPage = () => {
       setPipelineName('');
       setShowProjectForm(false);
       setAvailableFolders([]);
+      setSshPrivateKey('');
+      setSshPublicKey('');
+      setUseDirectSshKeys(false);
+      setSelectedSshKeyId('');
       setError(null);
       
       if (!isKedroProject || !pipelineName.trim()) {
@@ -259,11 +287,22 @@ const GitPage = () => {
   };
 
   useEffect(() => {
+    const handleMessage = (event) => {
+      if (event.data && event.data.type === 'oauth_success') {
+        console.log('OAuth success message received:', event.data);
+        if (event.data.code) {
+          exchangeCodeForToken(event.data.code);
+        }
+      }
+    };
+
+    window.addEventListener('message', handleMessage);
+
     const urlParams = new URLSearchParams(window.location.search);
     const code = urlParams.get('code');
     
     if (code) {
-      console.log('Bitbucket authorization code received:', code);
+      console.log('Bitbucket authorization code received from URL:', code);
       exchangeCodeForToken(code);
     }
 
@@ -273,6 +312,10 @@ const GitPage = () => {
     }
     
     fetchSshKeys();
+
+    return () => {
+      window.removeEventListener('message', handleMessage);
+    };
   }, []);
 
   const exchangeCodeForToken = async (code) => {
@@ -420,7 +463,7 @@ const GitPage = () => {
                         id="selectedFolder"
                         value={selectedFolder}
                         onChange={(e) => setSelectedFolder(e.target.value)}
-                        required
+                        required={!useDirectSshKeys}
                       >
                         <option value="">Choose a folder</option>
                         {availableFolders.map(folder => (
@@ -429,6 +472,9 @@ const GitPage = () => {
                           </option>
                         ))}
                       </select>
+                    )}
+                    {useDirectSshKeys && (
+                      <small className="info-text">Folder selection is optional when using direct SSH keys - the DAG will clone the repository directly.</small>
                     )}
                   </div>
                 )}
@@ -473,26 +519,71 @@ const GitPage = () => {
 
                 {isKedroProject && (
                   <div className="form-group">
-                    <label htmlFor="sshKey">SSH Key (for repository access):</label>
-                    <select
-                      id="sshKey"
-                      value={selectedSshKeyId}
-                      onChange={(e) => setSelectedSshKeyId(e.target.value)}
-                    >
-                      <option value="">Select an SSH key (optional)</option>
-                      {sshKeys.map(key => (
-                        <option key={key.id} value={key.id}>
-                          {key.name} ({key.provider})
-                        </option>
-                      ))}
-                    </select>
-                    <small>Select an SSH key to use for repository cloning. If none selected, will use local project.</small>
+                    <label>SSH Key (for repository access):</label>
+                    
+                    <div className="ssh-key-toggle">
+                      <label className="checkbox-item">
+                        <input
+                          type="checkbox"
+                          checked={useDirectSshKeys}
+                          onChange={(e) => setUseDirectSshKeys(e.target.checked)}
+                        />
+                        <span className="checkmark"></span>
+                        Use Direct SSH Keys (recommended)
+                      </label>
+                    </div>
+
+                    {useDirectSshKeys ? (
+                      <div className="direct-ssh-keys">
+                        <div className="form-group">
+                          <label htmlFor="sshPrivateKey">Private Key:</label>
+                          <textarea
+                            id="sshPrivateKey"
+                            value={sshPrivateKey}
+                            onChange={(e) => setSshPrivateKey(e.target.value)}
+                            placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;...&#10;-----END OPENSSH PRIVATE KEY-----"
+                            rows={8}
+                            className="ssh-key-textarea"
+                          />
+                          <small>Paste your SSH private key here</small>
+                        </div>
+                        
+                        <div className="form-group">
+                          <label htmlFor="sshPublicKey">Public Key:</label>
+                          <textarea
+                            id="sshPublicKey"
+                            value={sshPublicKey}
+                            onChange={(e) => setSshPublicKey(e.target.value)}
+                            placeholder="ssh-rsa AAAAB3NzaC1yc2E... user@host"
+                            rows={3}
+                            className="ssh-key-textarea"
+                          />
+                          <small>Paste your SSH public key here</small>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="database-ssh-keys">
+                        <select
+                          id="sshKey"
+                          value={selectedSshKeyId}
+                          onChange={(e) => setSelectedSshKeyId(e.target.value)}
+                        >
+                          <option value="">Select an SSH key (optional)</option>
+                          {sshKeys.map(key => (
+                            <option key={key.id} value={key.id}>
+                              {key.name} ({key.provider})
+                            </option>
+                          ))}
+                        </select>
+                        <small>Select an SSH key from database. If none selected, will use local project.</small>
+                      </div>
+                    )}
                   </div>
                 )}
 
                 <div className="form-actions">
-                  <button type="submit" className="btn-primary">
-                    Save Project Configuration
+                  <button type="submit" disabled={loading} className="btn-primary">
+                    {loading ? 'Triggering DAG...' : 'Trigger DAG'}
                   </button>
                 </div>
               </form>
