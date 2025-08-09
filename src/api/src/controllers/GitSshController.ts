@@ -1,7 +1,6 @@
 import { Request, Response } from "express";
 import { GitSshService } from "../services/GitSshService";
 import { WebSocketService, RepositoryEvent } from "../services/WebSocketService";
-import fetch from "node-fetch";
 
 export class GitSshController {
   private gitSshService: GitSshService;
@@ -90,20 +89,19 @@ export class GitSshController {
       }
 
       const responseData: any = {
-        id: sshKey.id,
-        name: sshKey.name,
-        publicKey: sshKey.publicKey,
-        provider: sshKey.provider,
-        description: sshKey.description,
-        isActive: sshKey.isActive,
-        createdAt: sshKey.createdAt,
-        updatedAt: sshKey.updatedAt
+          id: sshKey.id,
+          name: sshKey.name,
+          publicKey: sshKey.publicKey,
+          provider: sshKey.provider,
+          description: sshKey.description,
+          isActive: sshKey.isActive,
+          createdAt: sshKey.createdAt,
+          updatedAt: sshKey.updatedAt
       };
-
-      // Include private key only when explicitly requested (for DAG usage)
+        
       if (includePrivateKey && sshKey.privateKey) {
         responseData.privateKey = sshKey.privateKey;
-      }
+        }
 
       res.status(200).json({
         message: "SSH key retrieved successfully",
@@ -210,22 +208,31 @@ export class GitSshController {
       const fullExperimentName = experimentName || "kedro-pipeline";
       const experimentNameWithPipeline = `${fullExperimentName}-${pipelineName}`;
 
-      const airflowApiUrl = process.env.AIRFLOW_API_URL || "ahttp://localhost:8080";
-      const dagId = "kedro_pipeline";
+      const airflowApiUrl = process.env.AIRFLOW_API_URL || "http://localhost:8080";
+      const dagId = "kedro_pipeline_v2";
       
       const dagConf: any = {
-        pipeline_name: pipelineName,
-        repo_url: repoUrl || "",
-        branch: branch || "main",
-        project_name: projectName || "kedro_project",
-        experiment_name: fullExperimentName,
+          pipeline_name: pipelineName,
+          repo_url: repoUrl || "",
+          branch: branch || "main",
+          project_name: projectName || "kedro_project",
+          experiment_name: fullExperimentName,
         guid: guid
       };
 
       if (sshPrivateKey && sshPublicKey) {
-        dagConf.ssh_private_key = sshPrivateKey;
-        dagConf.ssh_public_key = sshPublicKey;
-        console.log("Using direct SSH keys for DAG configuration");
+        try {
+          const decodedPrivateKey = Buffer.from(sshPrivateKey, 'base64').toString('utf-8');
+          const decodedPublicKey = Buffer.from(sshPublicKey, 'base64').toString('utf-8');
+          
+          dagConf.ssh_private_key = decodedPrivateKey;
+          dagConf.ssh_public_key = decodedPublicKey;
+          console.log("Using decoded Base64 SSH keys for DAG configuration");
+        } catch (error) {
+          console.error("Error decoding Base64 SSH keys:", error);
+          res.status(400).json({ error: "Invalid SSH key format - Base64 decoding failed" });
+          return;
+        }
       } else if (sshKeyId) {
         dagConf.ssh_key_id = sshKeyId;
         console.log("Using SSH key ID for DAG configuration");
@@ -249,39 +256,49 @@ export class GitSshController {
       });
       
       try {
-        // Use Airflow CLI instead of REST API to bypass authentication issues
         console.log('Using Airflow CLI to trigger DAG...');
         
         const { exec } = require('child_process');
         const util = require('util');
         const execAsync = util.promisify(exec);
         
-        // Create a temporary JSON file for the configuration
+        // Write SSH keys to temporary files
         const fs = require('fs');
-        const tempConfigPath = `/tmp/dag_config_${guid}.json`;
-        fs.writeFileSync(tempConfigPath, JSON.stringify(dagRunPayload.conf));
+        const sshKeysDir = `/tmp/ssh_keys_${guid}`;
+        fs.mkdirSync(sshKeysDir, { recursive: true });
         
-        // Execute Airflow CLI command
-        const airflowCommand = `airflow dags trigger ${dagId} --conf '${JSON.stringify(dagRunPayload.conf)}'`;
+        const privateKeyPath = `${sshKeysDir}/id_rsa`;
+        const publicKeyPath = `${sshKeysDir}/id_rsa.pub`;
+        
+        if (dagConf.ssh_private_key) {
+          fs.writeFileSync(privateKeyPath, dagConf.ssh_private_key);
+          fs.chmodSync(privateKeyPath, 0o600);
+        }
+        
+        if (dagConf.ssh_public_key) {
+          fs.writeFileSync(publicKeyPath, dagConf.ssh_public_key);
+          fs.chmodSync(publicKeyPath, 0o644);
+        }
+        
+        const simplifiedConf = {
+          ...dagConf,
+          ssh_private_key: dagConf.ssh_private_key,
+          ssh_public_key: dagConf.ssh_public_key
+        };
+        
+        const airflowCommand = `airflow dags trigger ${dagId} --conf '${JSON.stringify(simplifiedConf)}'`;
         console.log(`Executing: ${airflowCommand}`);
         
-        const { stdout, stderr } = await execAsync(airflowCommand, { timeout: 30000 });
+        const { stdout, stderr } = await execAsync(airflowCommand, { timeout: 600000 }); 
         
         console.log('Airflow CLI stdout:', stdout);
         if (stderr) {
           console.log('Airflow CLI stderr:', stderr);
         }
         
-        // Clean up temp file
-        if (fs.existsSync(tempConfigPath)) {
-          fs.unlinkSync(tempConfigPath);
-        }
-        
-        // Check if the command was successful
-        if (stdout.includes('queued') || stdout.includes('running') || stdout.includes('manual__')) {
+        if (stdout.includes('queued') || stdout.includes('running') || stdout.includes('manual__') || stdout.includes('manual')) {
           console.log('DAG triggered successfully via CLI');
           
-          // Return success response
           res.status(200).json({
             message: "Pipeline triggered successfully",
             data: {
@@ -292,7 +309,7 @@ export class GitSshController {
               pipeline_name: pipelineName,
               repo_url: repoUrl,
               created_at: new Date().toISOString(),
-              method: "airflow_cli"
+              method: "airflow_cli_with_file_keys"
             }
           });
           return;
@@ -301,7 +318,13 @@ export class GitSshController {
         }
       } catch (cliError) {
         console.error('Airflow CLI error:', cliError);
-        const errorMessage = cliError instanceof Error ? cliError.message : 'Unknown CLI error';
+        let errorMessage = cliError instanceof Error ? cliError.message : 'Unknown CLI error';
+        
+        // Check if it's a timeout error
+        if (cliError && typeof cliError === 'object' && 'signal' in cliError && cliError.signal === 'SIGTERM') {
+          errorMessage = 'Command timed out after 120 seconds';
+        }
+        
         throw new Error(`Failed to trigger DAG via Airflow CLI: ${errorMessage}`);
       }
 
